@@ -2,9 +2,9 @@
 
 import os
 import json
-import random
-from typing import Annotated, Literal, Sequence, TypedDict, List, Dict, Any
-from langchain_core.messages import ChatPromptTemplate
+from typing import Literal, TypedDict, List, Dict
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import StateGraph, END
 from langchain_core.output_parsers import StrOutputParser, CommaSeparatedListOutputParser, JsonOutputParser
 from langchain_openai import ChatOpenAI
 
@@ -14,7 +14,15 @@ from utils import extract_text_from_file
 # --- 환경 설정 ---
 LLM_MODEL = "gpt-4o-mini"
 # OPENAI_API_KEY는 환경 변수에서 로드된다고 가정
-llm = ChatOpenAI(model=LLM_MODEL, temperature=0)
+def get_llm():
+    """모듈 import 시에는 인증이나 네트워크 호출을 하지 않습니다."""
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise ValueError("OPENAI_API_KEY 환경 변수를 설정해 주세요.")
+    return ChatOpenAI(model=LLM_MODEL, temperature=0)
+
+
+MAX_TURNS = 5
+MAX_FOLLOWUPS = 2
 
 # --- State 정의 (모든 정보 포함) ---
 class InterviewState(TypedDict):
@@ -53,14 +61,14 @@ def analyze_resume(state: InterviewState) -> InterviewState:
     summary_prompt = ChatPromptTemplate.from_template(
         "\"\"\"당신은 전문 채용 담당자입니다. 다음 이력서 텍스트를 3-4줄의 핵심 내용으로 요약해 주세요.\n        ---\n        {resume}\n        \"\"\""
     )
-    summary_chain = summary_prompt | llm | StrOutputParser()
+    summary_chain = summary_prompt | get_llm() | StrOutputParser()
     resume_summary = summary_chain.invoke({"resume": resume_text})
 
     # 2. 키워드 추출 체인
     keywords_prompt = ChatPromptTemplate.from_template(
         "\"\"\"당신은 전문 IT 헤드헌터입니다. 다음 이력서 텍스트에서 가장 중요한 핵심 키워드 10개를 쉼표(,)로 구분하여 추출해 주세요.\n        예: Python, 데이터 분석, NLP, 프로젝트 관리, 리더십\n        ---\n        {resume}\n        \"\"\""
     )
-    keywords_chain = keywords_prompt | llm | CommaSeparatedListOutputParser()
+    keywords_chain = keywords_prompt | get_llm() | CommaSeparatedListOutputParser()
     resume_keywords = keywords_chain.invoke({"resume": resume_text})
 
     return {
@@ -68,6 +76,27 @@ def analyze_resume(state: InterviewState) -> InterviewState:
         "resume_summary": resume_summary,
         "resume_keywords": resume_keywords,
     }
+
+def normalize_strategy(value):
+    if not isinstance(value, dict):
+        raise ValueError("질문 전략은 JSON 객체여야 합니다.")
+    topics = value.get("면접 질문 전략", value)
+    if not isinstance(topics, dict):
+        raise ValueError("면접 질문 전략의 주제 구조가 올바르지 않습니다.")
+    clean = {}
+    for topic, detail in topics.items():
+        if not isinstance(topic, str) or not isinstance(detail, dict):
+            continue
+        questions = detail.get("예시 질문", [])
+        if not isinstance(questions, list):
+            continue
+        questions = [q.strip() for q in questions if isinstance(q, str) and q.strip()]
+        if questions:
+            clean[topic] = {**detail, "예시 질문": questions}
+    if not clean:
+        raise ValueError("질문 전략에 유효한 예시 질문이 없습니다.")
+    return {"면접 질문 전략": clean}
+
 
 def generate_question_strategy(state: InterviewState) -> InterviewState:
     """질문 전략 수립: 3가지 분야의 질문 방향과 예시 질문을 JSON으로 생성"""
@@ -81,6 +110,7 @@ def generate_question_strategy(state: InterviewState) -> InterviewState:
         "아래 이력서 요약과 핵심 키워드를 바탕으로 3가지 주요 카테고리(경력 및 경험, 커뮤니케이션 능력, 논리적 사고)에 대한 면접 질문 전략을 수립해 주세요.\n"
         "\n"
         "각 카테고리별로 \"질문 방향\"과 2개의 \"예시 질문\" 리스트를 포함해야 합니다.\n"
+        "최상위 키는 반드시 면접 질문 전략이며, 그 값은 카테고리 이름을 키로 갖는 객체입니다.\n"
         "{format_instructions}\n"
         "\n"
         "--- 이력서 요약 ---\n"
@@ -92,15 +122,17 @@ def generate_question_strategy(state: InterviewState) -> InterviewState:
         partial_variables={"format_instructions": parser.get_format_instructions()}
     )
 
-    chain = prompt | llm | parser
+    chain = prompt | get_llm() | parser
     
     strategy_dict = chain.invoke({'summary': resume_summary, 'keywords': resume_keywords})
+    strategy_dict = normalize_strategy(strategy_dict)
+
     
     # 남아있는 주제 카테고리 초기화
     remaining_topics = list(strategy_dict.get("면접 질문 전략", {}).keys())
     
     # 첫 질문 및 큐 초기화 (경력 및 경험 카테고리로 시작)
-    first_topic = "경력 및 경험"
+    first_topic = "경력 및 경험" if "경력 및 경험" in remaining_topics else remaining_topics[0]
     first_question = ""
     question_queue = []
     current_strategy = ""
@@ -133,10 +165,14 @@ def evaluate_answer(state: InterviewState) -> InterviewState:
     current_answer = state.get("current_answer")
     
     # conversation 업데이트는 여기서 수행 (질문과 답변이 짝지어질 때)
-    conversation = state.get("conversation", [])
+    if not current_question or not current_question.strip():
+        raise ValueError("평가할 질문이 없습니다.")
+    if not current_answer or not current_answer.strip():
+        raise ValueError("답변을 입력해 주세요.")
+    conversation = list(state.get("conversation", []))
     conversation.append({"question": current_question, "answer": current_answer})
     
-    evaluation = state.get("evaluation", [])
+    evaluation = list(state.get("evaluation", []))
     
     # NOTE: 미션2에서 평가 항목을 5개로 고도화할 때 이 프롬프트 수정 필요
     prompt = ChatPromptTemplate.from_template(
@@ -162,9 +198,14 @@ def evaluate_answer(state: InterviewState) -> InterviewState:
         "\"\"\""
     )
     
-    chain = prompt | llm | JsonOutputParser()
+    chain = prompt | get_llm() | JsonOutputParser()
 
     eval_result = chain.invoke({"question": current_question, "answer": current_answer})
+    if not isinstance(eval_result, dict) or any(
+        eval_result.get(key) not in {"상", "중", "하"} for key in ("연관성", "구체성")
+    ):
+        raise ValueError("답변 평가 형식이 올바르지 않습니다.")
+
     
     # 평가 기록 업데이트
     evaluation.append({"question": current_question, "answer": current_answer, "evaluation": eval_result})
@@ -184,6 +225,9 @@ def decide_next_step(state: InterviewState) -> InterviewState:
     remaining_topics = state.get("remaining_topics", [])
     evaluation = state.get("evaluation", [])
     generate_count = state.get("generate_count", 0)
+
+    if conversation_count >= MAX_TURNS:
+        return {**state, "next_step": "summarize"}
 
     # 1. LLM 호출 준비: 최근 평가 결과와 질문 기록 정리
     if not evaluation:
@@ -222,7 +266,7 @@ def decide_next_step(state: InterviewState) -> InterviewState:
         "\"\"\""
     )
     
-    chain = prompt | llm | StrOutputParser()
+    chain = prompt | get_llm() | StrOutputParser()
     
     # LLM 호출
     next_action = chain.invoke({
@@ -232,42 +276,30 @@ def decide_next_step(state: InterviewState) -> InterviewState:
         "remaining_topics": remaining_topics
     }).strip().lower()
 
-    # 2. LLM 응답 기반 분기 처리
-    if conversation_count >= 5: # 규칙 1: 5회 초과 시 강제 종료
-        next_action = "summarize"
-        
-    elif next_action == "next_question": # 규칙 3: 다음 예시 질문으로 이동
-        # next_question 노드로 분기하기 위한 next_step 설정.
-        next_action = "next_question" 
-        
-    elif next_action == "next_topic": # 규칙 4: 다음 주제로 전환
-        # next_topic_question 노드로 분기하기 위한 next_step 설정.
-        next_action = "next_topic"
-        
-    elif next_action == "summarize": # 규칙 5: 종료
-        pass # summarize로 END
-
-    # 규칙 2: 심화 질문 (LLM이 'generate'를 반환했거나, 심화가 필요하다고 판단된 경우)
-    # NOTE: LLM이 '하'를 보고 'generate'를 반환했을 때 generate_count를 증가시키도록 로직을 분리
-    else: # next_action == "generate" (심화 질문)
-        state['generate_count'] = generate_count + 1
-        # generate_question 노드로 분기하기 위한 next_step 설정.
-        next_action = "generate"
-    
-    
+    fallback = "next_question" if question_queue else "next_topic" if remaining_topics else "summarize"
+    if next_action not in {"generate", "next_question", "next_topic", "summarize"}:
+        next_action = fallback
+    if next_action == "generate" and generate_count >= MAX_FOLLOWUPS:
+        next_action = fallback
+    if next_action == "next_question" and not question_queue:
+        next_action = "next_topic" if remaining_topics else "summarize"
+    if next_action == "next_topic" and not remaining_topics:
+        next_action = "next_question" if question_queue else "summarize"
     return {
         **state,
-        "next_step": next_action
+        "generate_count": generate_count + 1 if next_action == "generate" else generate_count,
+        "next_step": next_action,
     }
 
 
 def next_topic_question(state: InterviewState) -> InterviewState:
     """새 주제의 첫 질문을 선택하고 current_question에 설정"""
     
-    question_queue = state.get("question_queue", [])
-    remaining_topics = state.get("remaining_topics", [])
+    question_queue = list(state.get("question_queue", []))
+    remaining_topics = list(state.get("remaining_topics", []))
     strategy = state.get("question_strategy", {})
 
+    changing_topic = False
     # 1. 현재 주제의 남은 질문이 있다면 그것을 먼저 소진 (Safety Check)
     if question_queue:
         new_question = question_queue.pop(0)
@@ -275,6 +307,7 @@ def next_topic_question(state: InterviewState) -> InterviewState:
 
     # 2. 다음 주제로 전환해야 할 경우
     elif remaining_topics:
+        changing_topic = True
         current_topic_name = remaining_topics.pop(0) # 다음 주제를 꺼냄
         current_strategy = current_topic_name
         
@@ -293,6 +326,21 @@ def next_topic_question(state: InterviewState) -> InterviewState:
             "current_question": "면접을 종료합니다." # 종료 메시지
         }
     
+    if changing_topic and state.get("conversation"):
+        previous = state["conversation"][-1]
+        transition = ChatPromptTemplate.from_template(
+            "당신은 면접관입니다. 이전 답변에서 실제로 언급된 내용을 짧게 짚고 "
+            "새 주제의 질문으로 자연스럽게 이어 주세요. 답변에 없는 경험이나 성과를 만들지 마세요. "
+            "목표 질문의 의도를 유지하고, 중복 질문 없이 짧은 연결 문장과 질문 하나만 출력하세요.\n"
+            "이전 질문: {question}\n이전 답변: {answer}\n새 주제: {topic}\n목표 질문: {target}"
+        )
+        connected = (transition | get_llm() | StrOutputParser()).invoke({
+            "question": previous["question"], "answer": previous["answer"],
+            "topic": current_strategy, "target": new_question,
+        }).strip()
+        if connected:
+            new_question = connected
+
     # 3. State 업데이트
     return {
         **state,
@@ -301,7 +349,7 @@ def next_topic_question(state: InterviewState) -> InterviewState:
         "current_strategy": current_strategy,
         "question_queue": question_queue,
         "remaining_topics": remaining_topics,
-        "generate_count": 0, # 주제가 바뀌면 심화 질문 카운트 초기화
+        "generate_count": 0, # 새 예시 질문마다 심화 횟수 초기화
         "next_step": "evaluate" # 다음 실행은 답변을 기다린 후 평가로 돌아가야 함
     }
 
@@ -353,7 +401,7 @@ def generate_question(state: InterviewState) -> InterviewState:
         "\"\"\""
     )
     
-    chain = prompt | llm
+    chain = prompt | get_llm()
     
     # LLM 호출하여 다음 질문 생성
     response = chain.invoke({
@@ -376,6 +424,8 @@ def preProcessing_Interview(file_path: str) -> InterviewState:
 
     # 1. 텍스트 추출
     resume_text = extract_text_from_file(file_path)
+    if not resume_text.strip():
+        raise ValueError("이력서에 추출 가능한 텍스트가 없습니다.")
 
     # 2. State 초기화
     initial_state: InterviewState = {
@@ -405,51 +455,33 @@ def preProcessing_Interview(file_path: str) -> InterviewState:
 
     return state
 
-# --- LangGraph Graph Definition ---
+def summarize_interview(state: InterviewState) -> InterviewState:
+    """종료 상태 설정. 보고서 출력은 호출자에서 한 번만 합니다."""
+    return {**state, "next_step": "summarize", "current_answer": ""}
+
 
 def route_next(state: InterviewState) -> Literal["next_question", "generate", "next_topic", "summarize"]:
-    """LLM이 결정한 next_step에 따라 분기"""
-    action = state["next_step"]
-    
-    if action == "next_question":
-        return "next_question"
-    elif action == "next_topic":
-        return "next_topic"
-    elif action == "generate":
-        return "generate"
-    else: # "summarize" or "end"
-        return "summarize"
+    action = state.get("next_step", "summarize")
+    return action if action in {"next_question", "generate", "next_topic", "summarize"} else "summarize"
 
-# 그래프 정의 시작
-workflow = StateGraph(InterviewState)
 
-# 노드 추가
-workflow.add_node("evaluate", evaluate_answer)
-workflow.add_node("decide_next", decide_next_step)
-workflow.add_node("next_question", next_topic_question) # 다음 예시 질문 또는 주제 전환
-workflow.add_node("next_topic", next_topic_question) # 주제 전환 (next_question과 동일 함수 사용)
-workflow.add_node("generate", generate_question)
-workflow.add_node("summarize", summarize_interview)
+def build_graph():
+    """한 번의 invoke는 입력된 답변 한 개만 평가하고 다음 질문 또는 종료를 반환합니다."""
+    workflow = StateGraph(InterviewState)
+    workflow.add_node("evaluate", evaluate_answer)
+    workflow.add_node("decide_next", decide_next_step)
+    workflow.add_node("next_question", next_topic_question)
+    workflow.add_node("next_topic", next_topic_question)
+    workflow.add_node("generate", generate_question)
+    workflow.add_node("summarize", summarize_interview)
+    workflow.set_entry_point("evaluate")
+    workflow.add_edge("evaluate", "decide_next")
+    workflow.add_conditional_edges("decide_next", route_next, {
+        name: name for name in ("next_question", "next_topic", "generate", "summarize")
+    })
+    for name in ("next_question", "next_topic", "generate", "summarize"):
+        workflow.add_edge(name, END)
+    return workflow.compile()
 
-# 노드 연결
-workflow.set_entry_point("evaluate") # 첫 질문에 대한 답변부터 시작
 
-workflow.add_edge("evaluate", "decide_next")
-
-workflow.add_conditional_edges(
-    "decide_next",
-    route_next,
-    {
-        "next_question": "next_question",
-        "next_topic": "next_topic",
-        "generate": "generate",
-        "summarize": "summarize"
-    }
-)
-
-workflow.add_edge("next_question", "evaluate")
-workflow.add_edge("next_topic", "evaluate")
-workflow.add_edge("generate", "evaluate")
-workflow.add_edge("summarize", END)
-
-graph = workflow.compile()
+graph = build_graph()

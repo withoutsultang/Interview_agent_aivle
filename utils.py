@@ -67,3 +67,4 @@ def summarize_interview_report(state: dict):
     print("\n--- [면접 종료] ---")
 
 # NOTE: 필요하다면 PDF 차트 생성 관련 코드도 여기에 포함됩니다.
+

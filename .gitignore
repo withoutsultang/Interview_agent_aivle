@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+api_key.txt
+*.pem
+__pycache__/
+*.pyc
+.venv/
+resumes/
+reports/
+.pytest_cache/
