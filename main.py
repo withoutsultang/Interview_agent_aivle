@@ -32,9 +32,18 @@ def run_interview(state, *, graph_runner=graph, input_fn=input, output_fn=print)
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="이력서 기반 AI 면접 연습")
-    parser.add_argument("resume", type=Path, help="PDF 또는 DOCX 이력서 경로")
+    parser.add_argument("resume", nargs="?", type=Path, help="PDF 또는 DOCX 이력서 경로")
     parser.add_argument("--key-file", type=Path, help="선택적 KEY=VALUE 형식 파일")
+    parser.add_argument("--demo", action="store_true", help="키 없는 가상 면접 시연")
     args = parser.parse_args(argv)
+    if args.demo:
+        if args.resume or args.key_file:
+            parser.error("--demo는 이력서 경로나 키 파일 없이 실행해 주세요.")
+        from demo import run_demo
+        run_demo(run_interview)
+        return 0
+    if args.resume is None:
+        parser.error("이력서 경로 또는 --demo를 지정해 주세요.")
     try:
         if args.key_file:
             load_api_keys(args.key_file)

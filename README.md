@@ -16,6 +16,22 @@
 
 </div>
 
+[![Tests](https://github.com/withoutsultang/Interview_agent_aivle/actions/workflows/test.yml/badge.svg)](https://github.com/withoutsultang/Interview_agent_aivle/actions/workflows/test.yml)
+
+## API 키 없이 시연하기
+
+```bash
+python -m pip install -r requirements.txt
+python main.py --demo
+```
+
+가상 답변과 고정 모델 응답을 사용해 실제 그래프의 **평가 → 주제 전환 → 최종 피드백**을 재현합니다.
+
+> **지원자** 오류 로그를 비교해 설정 누락을 찾았습니다.  
+> **면접관** 설정 누락을 찾으셨군요. 팀원에게 변경 사항을 어떻게 공유했나요?
+
+실제 모델의 주제 전환은 [Live transition check](https://github.com/withoutsultang/Interview_agent_aivle/actions/workflows/live.yml)에서 별도로 확인합니다. 가상 답변 두 건으로 호출하며, 자연스러운 연결과 근거 없는 경험 추가 여부는 생성 질문을 읽어 판단합니다.
+
 ## 프로젝트 소개
 
 정해진 질문을 차례로 나열하는 대신, **지원자의 답변과 남은 면접 주제를 고려해 다음 행동을 결정**하는 AI 면접관입니다. PDF/DOCX 이력서를 읽고 개인화된 질문 전략을 세운 뒤, 답변의 연관성과 구체성을 평가해 후속 질문과 피드백을 제공합니다.
