@@ -331,6 +331,8 @@ def next_topic_question(state: InterviewState) -> InterviewState:
         transition = ChatPromptTemplate.from_template(
             "당신은 면접관입니다. 이전 답변에서 실제로 언급된 내용을 짧게 짚고 "
             "새 주제의 질문으로 자연스럽게 이어 주세요. 답변에 없는 경험이나 성과를 만들지 마세요. "
+            "원인을 모른다고 답했다면 그 불확실성을 짚으세요. 아직 조치하거나 공유했다고 전제하지 말고 "
+            "현재 상황을 어떻게 공유할 계획인지 묻는 식으로 목표 질문을 바꾸세요. "
             "목표 질문의 의도를 유지하고, 중복 질문 없이 짧은 연결 문장과 질문 하나만 출력하세요.\n"
             "이전 질문: {question}\n이전 답변: {answer}\n새 주제: {topic}\n목표 질문: {target}"
         )

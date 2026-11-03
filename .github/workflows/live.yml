@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['.github/workflows/live.yml', 'live_check.py']
+    paths: ['.github/workflows/live.yml', 'live_check.py', 'agent_nodes.py']
 permissions:
   contents: read
 jobs:
