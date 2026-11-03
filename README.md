@@ -18,6 +18,12 @@
 
 [![Tests](https://github.com/withoutsultang/Interview_agent_aivle/actions/workflows/test.yml/badge.svg)](https://github.com/withoutsultang/Interview_agent_aivle/actions/workflows/test.yml)
 
+## 주제 전환 시연
+
+![가상 지원자가 오류 원인을 아직 모른다고 답하자 면접관이 팀에 현재 상황을 공유할 계획을 묻는 장면](assets/topic-transition.gif)
+
+가상 답변으로 실행한 실제 모델 검증 결과를 20초로 재현했습니다. [검증 실행 기록](https://github.com/withoutsultang/Interview_agent_aivle/actions/runs/41664051169)
+
 ## API 키 없이 시연하기
 
 ```bash
